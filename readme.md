@@ -1,15 +1,62 @@
-# NL-to-SQL Business Query Tool
+# Natural-Language-to-SQL Dashboard Query Tool
 
-A tool that turns a plain-English business question into a SQL query,
-runs it against a real dataset in PostgreSQL, and returns the answer —
-built to demonstrate AI-assisted query generation for BI/reporting use cases.
+Ask business questions in plain English and get real SQL results back — no manual query writing required.
+
+This tool takes a question like *"What were total sales by region?"*, uses an LLM to translate it into a safe, read-only SQL query, runs it against a PostgreSQL database, and returns the results as a formatted table.
+
+## How it works
+
+1. You type a question in plain English.
+2. [LangChain](https://www.langchain.com/) + [Google Gemini](https://ai.google.dev/) convert the question into a SQL `SELECT` query, using the database schema as context.
+3. A safety guardrail checks the generated SQL — only single, read-only `SELECT` statements are allowed. Anything else (`INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, multiple statements, etc.) is blocked before it ever reaches the database.
+4. The query runs against PostgreSQL and the results are printed as a table.
+
+## Stack
+
+- **LangChain** — prompt orchestration
+- **Google Gemini API** (`gemini-2.5-flash`) — natural language → SQL translation
+- **PostgreSQL** — data storage and query execution
+- **Python** (`psycopg2`, `python-dotenv`)
 
 ## Dataset
 
-Uses the real **Sample Superstore Sales** dataset (~8,400 real orders):
-region, product category/subcategory, customer segment, sales, profit,
-discount, ship mode, dates, and more.
-Source: https://github.com/curran/data (superstoreSales.csv)
+Real order-level "Superstore Sales" data (~8,400 rows) — customer segments, product categories, regions, sales, profit, discounts, dates, and more.
+
+## Setup
+
+**1. Install dependencies**
+```bash
+pip install -r requirements.txt
+```
+
+**2. Configure your environment**
+
+Copy `.env.example` to `.env` and fill in your own values:
+```bash
+cp .env.example .env
+```
+```
+PGHOST=localhost
+PGPORT=5432
+PGDATABASE=superstore
+PGUSER=your_postgres_username
+PGPASSWORD=your_postgres_password
+GOOGLE_API_KEY=your_gemini_api_key
+```
+
+Get a free Gemini API key at [aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey).
+
+**3. Load the data**
+
+Place `superstoreSales.csv` in the project folder (or let the script download it automatically), then run:
+```bash
+python db_setup.py
+```
+
+**4. Ask a question**
+```bash
+python query_tool.py "What were total sales by region?"
+```
 
 ## Example
 
@@ -17,80 +64,38 @@ Source: https://github.com/curran/data (superstoreSales.csv)
 $ python query_tool.py "What were total sales by region?"
 
 Generated SQL:
-  SELECT region, ROUND(SUM(sales)::numeric, 2) as total_sales
-  FROM sales GROUP BY region ORDER BY total_sales DESC;
+  SELECT region, SUM(sales) FROM sales GROUP BY region
 
 Results:
-region                | total_sales
------------------------------------
-West                  | 3597549.28
-Ontario               | 3063212.48
-Prarie                | 2837304.60
-...
+region                | sum
+------------------------------------
+Atlantic              | 2014248.2035
+Yukon                 | 975867.3710
+Northwest Territories | 800847.3295
+Ontario               | 3063212.4795
+Prarie                | 2837304.6015
+West                  | 3597549.2755
+Quebec                | 1510195.0800
+Nunavut               | 116376.4835
 ```
 
-```
-$ python query_tool.py "Which product category is most profitable?"
-
-Generated SQL:
-  SELECT product_category, ROUND(SUM(profit)::numeric, 2) as total_profit
-  FROM sales GROUP BY product_category ORDER BY total_profit DESC LIMIT 1;
-
-Results:
-product_category | total_profit
--------------------------------
-Technology       | 886313.52
-```
-
-## How it works
-
-1. `db_setup.py` downloads the real Superstore CSV, cleans known quirks
-   in the source file (old-Mac-style `\r` line endings, stray blank rows),
-   and loads it into a PostgreSQL table (`sales`).
-2. `query_tool.py` takes a question, sends the database schema + question
-   to Gemini (via LangChain) to generate a PostgreSQL query.
-3. Before running anything, the query passes through a **safety check**
-   that only allows single, read-only `SELECT` statements — any
-   `INSERT`/`UPDATE`/`DELETE`/`DROP`/chained statement is rejected. LLM
-   output is treated as untrusted input, not executed blindly.
-4. The query runs against Postgres and results print as a formatted table.
-
-## Setup
-
-Requires a running PostgreSQL instance (local install, or a hosted free
-tier like Neon/Supabase).
-
+More example questions to try:
 ```bash
-pip install -r requirements.txt
-
-# Set your Postgres connection (defaults shown — edit as needed)
-export PGHOST=localhost
-export PGPORT=5432
-export PGDATABASE=superstore
-export PGUSER=appuser
-export PGPASSWORD=appuser_pw
-
-python db_setup.py                       # downloads real data & loads Postgres (run once)
-
-export GOOGLE_API_KEY="your-key-here"    # free key: https://aistudio.google.com/app/apikey
-python query_tool.py "your question here"
+python query_tool.py "What are the top 5 products by profit?"
+python query_tool.py "Which customer segment has the highest average discount?"
 ```
 
-If you're setting up Postgres locally for the first time:
+## Safety
 
-```bash
-sudo apt-get install -y postgresql postgresql-contrib
-sudo service postgresql start
-sudo -u postgres psql -c "CREATE USER appuser WITH PASSWORD 'appuser_pw';"
-sudo -u postgres psql -c "CREATE DATABASE superstore OWNER appuser;"
-```
+All generated SQL is treated as untrusted input. Before execution, queries are checked to ensure they:
+- Start with `SELECT`
+- Contain no data-modifying or schema-modifying keywords (`INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`, `CREATE`)
+- Contain only a single statement (no `;`-separated injection attempts)
 
-## Tech stack
-
-Python, LangChain, Google Gemini API, PostgreSQL
+Any query that fails these checks is rejected and never runs against the database.
 
 ## Possible extensions
 
-- Add a simple web UI (Streamlit/FastAPI) instead of CLI
-- Deploy as an AWS Lambda function behind API Gateway for on-demand queries,
-  with the Postgres instance on RDS
+- Deploy as a hosted API (e.g. AWS Lambda or EC2) for use in a BI dashboard
+- Add a lightweight web frontend for non-technical users
+- Support additional databases (MySQL, BigQuery, Snowflake)
